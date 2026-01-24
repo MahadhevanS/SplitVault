@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "scheme": "v",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
@@ -16,12 +17,32 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.mahadhevan0502.v",
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+
+      "intentFilters": [
+        {
+          "action": "SEND",
+          "category": ["DEFAULT"],
+          "data": [
+            { "mimeType": "image/*" },
+            { "mimeType": "text/plain" }
+          ]
+        },
+        {
+          "action": "SEND_MULTIPLE",
+          "category": ["DEFAULT"],
+          "data": [
+            { "mimeType": "image/*" }
+          ]
+        }
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
