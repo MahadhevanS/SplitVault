@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   Button,
   Alert,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../api/supabase';
 import { Trip } from '../../types/database';
 import { Colors } from '../../constants';
@@ -33,11 +33,18 @@ export default function Home() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchTrips();
-  }, []);
+  // ✅ FIX: useFocusEffect ensures this runs every time the screen becomes visible
+  useFocusEffect(
+    useCallback(() => {
+      fetchTrips();
+    }, [])
+  );
 
   const fetchTrips = async () => {
+    // Only show loading spinner on the initial load to prevent flicker on every focus
+    // You can adjust this preference if you want a spinner every time
+    // setLoading(true); 
+
     const {
       data: { session },
     } = await supabase.auth.getSession();
@@ -53,14 +60,16 @@ export default function Home() {
       .from('trip_members')
       .select('trip:trip_id(*)')
       .eq('user_id', userId)
-      .eq('trip.status', 'Active');
+      .eq('trip.status', 'Active')
+      // Optional: Sort by newest first
+      .order('created_at', { foreignTable: 'trip', ascending: false });
 
     if (error) {
       console.error('Error fetching trips:', error);
     } else if (data) {
       setTrips(
         data
-          .map(item => item.trip)
+          .map((item: any) => item.trip)
           .filter((t): t is Trip => t !== null)
       );
     }
@@ -132,7 +141,7 @@ export default function Home() {
   );
 
   if (loading) {
-    return <ActivityIndicator size="large" style={{ flex: 1 }} />;
+    return <ActivityIndicator size="large" style={{ flex: 1, justifyContent: 'center' }} />;
   }
 
   return (
@@ -153,13 +162,16 @@ export default function Home() {
         keyExtractor={item => item.trip_id}
         renderItem={renderTripItem}
         ListEmptyComponent={<EmptyTrips onCreate={() => navigation.navigate('Trip', { screen: 'CreateTrip' })} />}
+        contentContainerStyle={{ paddingBottom: 50 }}
       />
 
-      <Button
-        title="Logout"
-        onPress={() => supabase.auth.signOut()}
-        color={Colors.danger}
-      />
+      <View style={{ marginTop: 10 }}>
+        <Button
+          title="Logout"
+          onPress={() => supabase.auth.signOut()}
+          color={Colors.danger}
+        />
+      </View>
     </View>
   );
 }
@@ -187,6 +199,11 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
 
   tripName: {
@@ -200,16 +217,16 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  scanQrButton: {
-    backgroundColor: Colors.primary,
+  importBtn: {
+    backgroundColor: '#E8F2FF', // Light blue background
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 6,
     marginLeft: 10,
   },
 
-  scanQrText: {
-    color: '#fff',
+  importText: {
+    color: Colors.primary,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -223,7 +240,7 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 18,
     fontWeight: '600',
-    color: Colors.text,
+    color: '#333',
   },
 
   emptySubText: {

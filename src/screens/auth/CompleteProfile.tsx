@@ -8,8 +8,15 @@ import {
   StyleSheet,
 } from 'react-native';
 import { supabase } from '../../api/supabase';
+import { useNavigation } from '@react-navigation/native';
 
-export default function CompleteProfile() {
+interface CompleteProfileProps {
+  onSaveSuccess: () => void;
+}
+
+export default function CompleteProfile({ onSaveSuccess }: CompleteProfileProps) {
+  const navigation = useNavigation<any>();
+
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
@@ -32,16 +39,22 @@ export default function CompleteProfile() {
       return;
     }
 
-    const { error } = await supabase.from('users').insert({
-      id: user.id,
-      email: user.email,
-      name,
-      phone,
-    });
+    const { error } = await supabase
+      .from('users')
+      .upsert({ 
+        id: user.id, // ID is required for upsert
+        name, 
+        phone,
+        email: user.email
+      });
 
     setLoading(false);
-
-    if (error) {
+    
+    if (!error) {
+      // 2. DO NOT Navigate manually. 
+      // Call the parent function to trigger a state change in RootNavigator.
+      onSaveSuccess();
+    } else {
       Alert.alert('Error', error.message);
     }
     // ✅ NO navigation here
@@ -54,6 +67,7 @@ export default function CompleteProfile() {
 
       <TextInput
         placeholder="Full Name"
+        placeholderTextColor="#999"
         style={styles.input}
         value={name}
         onChangeText={setName}
@@ -61,6 +75,7 @@ export default function CompleteProfile() {
 
       <TextInput
         placeholder="Phone Number"
+        placeholderTextColor="#999"
         style={styles.input}
         value={phone}
         onChangeText={setPhone}

@@ -78,9 +78,7 @@ export default function ScreenshotImport() {
     setLoading(true);
     try {
       const ocr = await TextRecognition.recognize(uri);
-      console.log(ocr)
       const fullText = ocr.text || ocr.blocks?.map(b => b.text).join('\n') || '';
-      console.log('OCR Result:', fullText);
       if (!fullText.trim()) {
         Alert.alert('No text detected', 'Please ensure the screenshot is clear.');
         return;

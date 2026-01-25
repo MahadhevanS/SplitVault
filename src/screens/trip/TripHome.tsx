@@ -11,6 +11,7 @@ import {
   Modal,
   Alert,
   Linking,
+  SafeAreaView, // Added for better modal rendering
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Contacts from 'expo-contacts';
@@ -22,6 +23,12 @@ import { supabase } from '@/src/api/supabase';
 import { TripBalance } from '@/src/types/database';
 import { CURRENCY, Colors } from '@/src/constants';
 import { showAlert } from '@/src/utils/showAlert';
+
+interface RegisteredContact {
+  contact: Contacts.Contact;
+  email: string;
+  name: string;
+}
 
 export default function TripDetailScreen() {
   const navigation = useNavigation<any>();
@@ -38,7 +45,8 @@ export default function TripDetailScreen() {
 
   // Contact & Search State
   const [showContactModal, setShowContactModal] = useState(false);
-  const [deviceContacts, setDeviceContacts] = useState<Contacts.Contact[]>([]);
+  const [deviceContacts, setDeviceContacts] = useState<RegisteredContact[]>([]);
+  const [selectedContacts, setSelectedContacts] = useState<RegisteredContact[]>([]); // New: Multiple selection
   const [searchQuery, setSearchQuery] = useState('');
   const [contactLoading, setContactLoading] = useState(false);
   const [addingMember, setAddingMember] = useState(false);
@@ -132,23 +140,73 @@ export default function TripDetailScreen() {
     );
   }, [searchQuery, deviceContacts]);
 
+  const toggleContact = (contact: RegisteredContact) => {
+    setSelectedContacts((prev) => {
+      const exists = prev.some((c) => c.email === contact.email);
+      if (exists) {
+        return prev.filter((c) => c.email !== contact.email);
+      } else {
+        return [...prev, contact];
+      }
+    });
+  };
+
   async function handleOpenContacts() {
     setContactLoading(true);
+    setSelectedContacts([]); // Clear previous selection
+    setShowContactModal(true); // Open immediately
+
     try {
       const { status } = await Contacts.requestPermissionsAsync();
-      if (status === 'granted') {
-        setShowContactModal(true);
-        const { data } = await Contacts.getContactsAsync({
-          fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
-          sort: Contacts.SortTypes.FirstName,
-        });
-        setDeviceContacts(data.filter(c => c.phoneNumbers && c.phoneNumbers.length > 0));
-      } else {
-        Alert.alert("Permission Required", "Allow contact access in settings.", [
-          { text: "Cancel" },
-          { text: "Settings", onPress: () => Linking.openSettings() }
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Allow contact access in settings.', [
+          { text: 'Cancel', onPress: () => setShowContactModal(false) },
+          { text: 'Settings', onPress: () => Linking.openSettings() },
         ]);
+        return;
       }
+
+      const { data } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+      });
+
+      // 🔹 Build phone → contact map
+      const phoneToContact = new Map<string, Contacts.Contact>();
+
+      data.forEach((c) => {
+        c.phoneNumbers?.forEach((p) => {
+          const phone = normalizePhone(p.number!);
+          phoneToContact.set(phone, c);
+        });
+      });
+
+      const phoneNumbers = Array.from(phoneToContact.keys());
+
+      if (phoneNumbers.length === 0) {
+        setDeviceContacts([]);
+        return;
+      }
+
+      // 🔹 ONE Supabase query
+      const { data: users, error } = await supabase
+        .from('users')
+        .select('id, email, phone, name') // Fetched ID to compare with members
+        .in('phone', phoneNumbers);
+
+      if (error) throw error;
+
+      // 🔹 Filter out users ALREADY in this trip
+      const existingUserIds = members.map((m) => m.user_id);
+
+      const matched: RegisteredContact[] = users
+        .filter((u) => !existingUserIds.includes(u.id)) // Exclude existing members
+        .map((u) => ({
+          contact: phoneToContact.get(u.phone)!,
+          email: u.email,
+          name: phoneToContact.get(u.phone)?.name || u.name || 'Unknown',
+        }));
+
+      setDeviceContacts(matched);
     } catch (e) {
       showAlert('Error', 'Failed to load contacts');
     } finally {
@@ -156,38 +214,36 @@ export default function TripDetailScreen() {
     }
   }
 
-  async function selectContact(contact: Contacts.Contact) {
-    if (!contact.phoneNumbers?.[0]) return;
-    const cleanNumbers = contact.phoneNumbers.map(p => normalizePhone(p.number!));
+  async function handleAddSelectedMembers() {
+    if (selectedContacts.length === 0) {
+      setShowContactModal(false);
+      return;
+    }
 
     setAddingMember(true);
     try {
-      const { data: foundUsers, error } = await supabase
-        .from('users')
-        .select('email')
-        .in('phone', cleanNumbers);
+      // Add all selected members sequentially or parallel
+      const promises = selectedContacts.map(member => 
+        addMemberToTrip({
+          tripId,
+          email: member.email,
+          nickname: member.name,
+        })
+      );
 
-      if (error) throw error;
+      await Promise.all(promises);
 
-      if (foundUsers && foundUsers.length > 0) {
-        await addMemberToTrip({
-          tripId: tripId,
-          email: foundUsers[0].email,
-          nickname: contact.name, 
-        });
-        setShowContactModal(false);
-        setSearchQuery('');
-        await refreshTripData(currentUserId!);
-        showAlert('Success', `${contact.name} added!`);
-      } else {
-        showAlert('User not found', `${contact.name} is not registered.`);
-      }
+      await refreshTripData(currentUserId!);
+      setShowContactModal(false);
+      setSearchQuery('');
+      showAlert('Success', `${selectedContacts.length} members added`);
     } catch (e: any) {
       showAlert('Error', e.message);
     } finally {
       setAddingMember(false);
     }
   }
+
 
   if (loading) return <ActivityIndicator size="large" color={Colors.primary} style={styles.center} />;
 
@@ -276,11 +332,16 @@ export default function TripDetailScreen() {
 
       {/* SEARCH CONTACTS MODAL */}
       <Modal visible={showContactModal} animationType="slide" presentationStyle="pageSheet">
-        <View style={styles.contactModalContainer}>
+        <SafeAreaView style={styles.contactModalContainer}>
           <View style={styles.modalHeader}>
-             <Text style={styles.contactModalTitle}>Add Member</Text>
              <TouchableOpacity onPress={() => setShowContactModal(false)}>
-                <Text style={{color: Colors.primary, fontWeight: '600'}}>Cancel</Text>
+                <Text style={styles.cancelText}>Cancel</Text>
+             </TouchableOpacity>
+             <Text style={styles.contactModalTitle}>Add Members</Text>
+             <TouchableOpacity onPress={handleAddSelectedMembers} disabled={addingMember}>
+                <Text style={[styles.doneText, addingMember && { opacity: 0.5 }]}>
+                    {addingMember ? 'Adding...' : `Done (${selectedContacts.length})`}
+                </Text>
              </TouchableOpacity>
           </View>
 
@@ -289,35 +350,63 @@ export default function TripDetailScreen() {
             placeholder="Search contacts..."
             value={searchQuery}
             onChangeText={setSearchQuery}
-            autoFocus
           />
 
           {addingMember && (
             <View style={styles.addingOverlay}>
-               <ActivityIndicator color={Colors.primary} />
-               <Text style={{marginTop: 10, color: '#666'}}>Adding member...</Text>
+               <ActivityIndicator color={Colors.primary} size="large" />
+               <Text style={{marginTop: 10, color: '#666'}}>Adding members...</Text>
             </View>
           )}
 
-          {contactLoading ? <ActivityIndicator size="large" color={Colors.primary} /> : (
+          {contactLoading ? <ActivityIndicator size="large" color={Colors.primary} style={{marginTop: 20}} /> : (
             <FlatList
-              data={filteredContacts}
-              keyExtractor={(item) => item.id}
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.contactItem} onPress={() => selectContact(item)}>
-                  <View style={styles.contactAvatar}>
-                    <Text style={styles.avatarText}>{item.name.charAt(0)}</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.contactName}>{item.name}</Text>
-                    <Text style={styles.contactPhone}>{item.phoneNumbers?.[0].number}</Text>
-                  </View>
-                </TouchableOpacity>
-              )}
-            />
+                data={filteredContacts}
+                keyExtractor={(item) => item.email}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingBottom: 40 }}
+                renderItem={({ item }) => {
+                  const isSelected = selectedContacts.some(c => c.email === item.email);
+                  const initials = item.name
+                    .split(' ')
+                    .map(n => n[0])
+                    .slice(0, 2)
+                    .join('');
+
+                  return (
+                    <TouchableOpacity
+                      style={[styles.contactItem, isSelected && styles.contactItemSelected]}
+                      onPress={() => toggleContact(item)}
+                    >
+                      <View style={styles.contactLeft}>
+                          <View style={styles.contactAvatar}>
+                            <Text style={styles.avatarText}>{initials}</Text>
+                          </View>
+                          <View>
+                            <Text style={styles.contactName}>{item.name}</Text>
+                            <Text style={styles.contactPhone}>
+                              {item.contact.phoneNumbers?.[0]?.number}
+                            </Text>
+                          </View>
+                      </View>
+
+                      {/* Checkbox Visual */}
+                      <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
+                         {isSelected && <Text style={styles.checkmark}>✓</Text>}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
+                ListEmptyComponent={
+                  <Text style={styles.emptyListText}>
+                    {deviceContacts.length === 0 
+                        ? 'None of your contacts are on the app, or all are already in this trip.' 
+                        : 'No contacts found.'}
+                  </Text>
+                }
+              />
           )}
-        </View>
+        </SafeAreaView>
       </Modal>
     </ScrollView>
   );
@@ -355,15 +444,45 @@ const styles = StyleSheet.create({
   memberBalance: { fontSize: 16, fontWeight: '700' },
   addIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
   addIconText: { color: '#fff', fontSize: 22, fontWeight: 'bold' },
+  
+  // Modal Styles
   contactModalContainer: { flex: 1, backgroundColor: '#fff', padding: 20 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  contactModalTitle: { fontSize: 20, fontWeight: 'bold' },
-  searchBar: { backgroundColor: '#f0f0f0', padding: 12, borderRadius: 10, marginBottom: 20, fontSize: 16 },
-  contactItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, marginTop: 10 },
+  contactModalTitle: { fontSize: 18, fontWeight: 'bold' },
+  cancelText: { color: '#666', fontSize: 16 },
+  doneText: { color: Colors.primary, fontWeight: '700', fontSize: 16 },
+
+  searchBar: { backgroundColor: '#f0f0f0', padding: 12, borderRadius: 10, marginBottom: 10, fontSize: 16 },
+  
+  contactItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  contactItemSelected: { backgroundColor: '#F9FAFF' },
+  contactLeft: { flexDirection: 'row', alignItems: 'center' },
   contactAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e1e1e1', alignItems: 'center', justifyContent: 'center', marginRight: 15 },
   avatarText: { fontWeight: 'bold', color: '#777' },
   contactName: { fontSize: 16, fontWeight: '600' },
   contactPhone: { fontSize: 13, color: '#888' },
-  addingOverlay: { position: 'absolute', top: '50%', left: '10%', right: '10%', backgroundColor: 'rgba(255,255,255,0.9)', padding: 20, borderRadius: 10, alignItems: 'center', zIndex: 10, elevation: 5 },
-  backBtn: { marginTop: 10, backgroundColor: Colors.primary, padding: 10, borderRadius: 8 }
+  
+  addingOverlay: { position: 'absolute', top: '50%', left: '10%', right: '10%', backgroundColor: 'rgba(255,255,255,0.95)', padding: 30, borderRadius: 16, alignItems: 'center', zIndex: 100, elevation: 10, shadowColor: '#000', shadowOffset: {width:0, height:2}, shadowOpacity:0.25, shadowRadius:3.84 },
+  backBtn: { marginTop: 10, backgroundColor: Colors.primary, padding: 10, borderRadius: 8 },
+  emptyListText: { textAlign: 'center', marginTop: 40, color: '#AAA', paddingHorizontal: 20 },
+
+  // Checkbox styles
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#CCC',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  checkmark: {
+    color: '#fff',
+    fontSize: 14, 
+    fontWeight: 'bold',
+  }
 });

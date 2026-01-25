@@ -14,38 +14,55 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mahadhevan0502.v",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.mahadhevan0502.v",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-
       "intentFilters": [
         {
           "action": "SEND",
-          "category": ["DEFAULT"],
+          "category": [
+            "DEFAULT"
+          ],
           "data": [
-            { "mimeType": "image/*" },
-            { "mimeType": "text/plain" }
+            {
+              "mimeType": "image/*"
+            },
+            {
+              "mimeType": "text/plain"
+            }
           ]
         },
         {
           "action": "SEND_MULTIPLE",
-          "category": ["DEFAULT"],
+          "category": [
+            "DEFAULT"
+          ],
           "data": [
-            { "mimeType": "image/*" }
+            {
+              "mimeType": "image/*"
+            }
           ]
         }
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "14e77260-7605-4241-8608-3c4d14ed3bea"
+      }
     }
   }
 }

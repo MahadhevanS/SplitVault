@@ -23,7 +23,7 @@ export default function Login() {
     }
 
     setLoading(true);
-    const { error } = await supabase.auth.signInWithOtp({ email });
+    const { error } = await supabase.auth.signInWithOtp({ email});
     setLoading(false);
 
     if (error) {
@@ -64,6 +64,7 @@ export default function Login() {
           <TextInput
             style={styles.input}
             placeholder="Email address"
+            placeholderTextColor="#999"
             value={email}
             onChangeText={setEmail}
             autoCapitalize="none"
@@ -83,6 +84,7 @@ export default function Login() {
           <TextInput
             style={styles.input}
             placeholder="6-digit OTP"
+            placeholderTextColor="#999"
             value={otp}
             onChangeText={setOtp}
             keyboardType="number-pad"
