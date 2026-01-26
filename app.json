@@ -1,12 +1,12 @@
 {
   "expo": {
-    "name": "v",
-    "slug": "v",
+    "name": "AnshMitr",
+    "slug": "AnshMitr",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "scheme": "v",
+    "scheme": "AnshMitr",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
@@ -15,13 +15,13 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.mahadhevan0502.v",
+      "bundleIdentifier": "com.mahadhevan0502.AnshMitr",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.mahadhevan0502.v",
+      "package": "com.mahadhevan0502.AnshMitr",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {

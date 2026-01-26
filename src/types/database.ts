@@ -40,5 +40,13 @@ export interface TripBalance {
   net_balance: number; // Positive = Lender, Negative = Debtor
 }
 
-// Add types for TripMember, Involvement, and Consent as needed
-// For now, these core types cover the main logic.
+export interface ExpenseWithPayer {
+  name: string;
+  amount: number;
+  payer: UserProfile | null;
+}
+
+export interface Consent {
+  consent_id: UUID;
+  expense: ExpenseWithPayer | null;
+}
