@@ -11,8 +11,8 @@ import {
   Alert,
   Linking,
   ScrollView,
-  SafeAreaView,
-  Pressable, // Added for the modal backdrop
+  SafeAreaView, // Keep for Modal only
+  Pressable,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import * as Contacts from 'expo-contacts';
@@ -36,7 +36,6 @@ interface RegisteredContact {
   name: string;
 }
 
-// ✅ Defined the options you requested
 const CURRENCY_OPTIONS = [
   { label: 'Indian Rupee', value: 'INR', symbol: '₹' },
   { label: 'US Dollar', value: 'USD', symbol: '$' },
@@ -51,8 +50,6 @@ export default function CreateTripScreen() {
   const navigation = useNavigation<any>();
 
   const [name, setName] = useState('');
-  
-  // ✅ Default to INR object
   const [selectedCurrency, setSelectedCurrency] = useState(CURRENCY_OPTIONS[0]);
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
 
@@ -148,7 +145,7 @@ export default function CreateTripScreen() {
       if (error) throw error;
 
       const matched: RegisteredContact[] = users
-        .filter((u) => u.email !== currentUserEmail)
+        .filter((u) => !currentUserEmail || u.email !== currentUserEmail)
         .map((u) => ({
           contact: phoneToContact.get(u.phone)!,
           email: u.email,
@@ -173,7 +170,6 @@ export default function CreateTripScreen() {
 
     setLoading(true);
     try {
-      // ✅ Pass the selected value (e.g., 'INR') to the backend
       const trip = await createTrip({ 
         name, 
         currency: selectedCurrency.value 
@@ -198,7 +194,7 @@ export default function CreateTripScreen() {
   /* ---------------- UI ---------------- */
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
+    <View style={{ flex: 1, backgroundColor: '#fff' }}>
       <View style={styles.container}>
         <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
           <Text style={styles.header}>Create New Trip</Text>
@@ -213,10 +209,10 @@ export default function CreateTripScreen() {
             onChangeText={setName}
           />
 
-          {/* ✅ CURRENCY DROPDOWN TRIGGER */}
+          {/* CURRENCY DROPDOWN TRIGGER */}
           <Text style={styles.label}>Currency</Text>
           <TouchableOpacity 
-            style={styles.input} // Reusing input style for consistency
+            style={styles.input}
             onPress={() => setShowCurrencyPicker(true)}
           >
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -264,14 +260,15 @@ export default function CreateTripScreen() {
         </TouchableOpacity>
 
         {/* ---------------- CONTACT MODAL ---------------- */}
-        <Modal visible={showContactModal} animationType="slide">
+        <Modal 
+          visible={showContactModal} 
+          animationType="slide"
+          onRequestClose={() => setShowContactModal(false)}
+        >
           <SafeAreaView style={{ flex: 1 }}>
+            
             <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setShowContactModal(false)}>
-                <Text style={styles.doneModalText}>Done</Text>
-              </TouchableOpacity>
               <Text style={styles.modalTitle}>Add Friends</Text>
-              <View style={{ width: 40 }} />
             </View>
 
             <View style={styles.searchBarContainer}>
@@ -284,32 +281,27 @@ export default function CreateTripScreen() {
             </View>
 
             {contactLoading ? (
-              <ActivityIndicator style={{ marginTop: 40 }} />
+              <ActivityIndicator style={{ marginTop: 40 }} size="large" color={Colors.primary} />
             ) : (
               <FlatList
                 data={filteredContacts}
                 keyExtractor={(i) => i.email}
-                contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}
+                contentContainerStyle={{ paddingBottom: 120 }}
                 renderItem={({ item }) => {
                   const isSelected = members.some((m) => m.email === item.email);
-                  const initials = item.name.split(' ').map((n) => n[0]).slice(0, 2).join('');
                   return (
                     <TouchableOpacity
                       style={[styles.contactItem, isSelected && styles.contactItemSelected]}
                       onPress={() => toggleMember(item)}
                     >
-                      <View style={styles.contactLeft}>
-                        <View style={styles.contactAvatar}>
-                          <Text style={styles.avatarText}>{initials}</Text>
-                        </View>
-                        <View>
-                          <Text style={styles.contactName}>{item.name}</Text>
-                          <Text style={styles.contactPhone}>{item.contact.phoneNumbers?.[0]?.number}</Text>
-                        </View>
+                      <View>
+                        <Text style={styles.contactName}>{item.name}</Text>
+                        <Text style={styles.contactPhone}>
+                          {item.contact.phoneNumbers?.[0]?.number}
+                        </Text>
                       </View>
-                      <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
-                         {isSelected && <Text style={styles.checkmark}>✓</Text>}
-                      </View>
+                      
+                      {isSelected && <Text style={styles.checkmark}>✓</Text>}
                     </TouchableOpacity>
                   );
                 }}
@@ -322,10 +314,19 @@ export default function CreateTripScreen() {
                 }
               />
             )}
+
+            {/* FLOATING DONE BUTTON */}
+            <Pressable
+              style={styles.floatingDoneButton}
+              onPress={() => setShowContactModal(false)}
+            >
+              <Text style={styles.floatingDoneIcon}>✓</Text>
+            </Pressable>
+
           </SafeAreaView>
         </Modal>
 
-        {/* ---------------- ✅ CURRENCY PICKER MODAL ---------------- */}
+        {/* ---------------- CURRENCY PICKER MODAL ---------------- */}
         <Modal visible={showCurrencyPicker} transparent animationType="fade">
           <Pressable 
             style={styles.modalOverlay} 
@@ -349,7 +350,7 @@ export default function CreateTripScreen() {
                     {opt.label} ({opt.symbol})
                   </Text>
                   {selectedCurrency.value === opt.value && (
-                     <Text style={{color: Colors.primary, fontWeight:'bold'}}>✓</Text>
+                      <Text style={{color: Colors.primary, fontWeight:'bold'}}>✓</Text>
                   )}
                 </TouchableOpacity>
               ))}
@@ -358,14 +359,21 @@ export default function CreateTripScreen() {
         </Modal>
 
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
 /* ---------------- STYLES ---------------- */
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 24 },
+  // FIXED: Changed padding to paddingHorizontal only. 
+  // paddingTop: 0 ensures we rely on App.tsx global safe area.
+  container: { 
+    flex: 1, 
+    paddingHorizontal: 24,
+    paddingTop: 10, // Small buffer (optional), or set to 0
+    paddingBottom: 24 
+  },
   header: { fontSize: 28, fontWeight: 'bold', marginBottom: 25 },
   label: { fontSize: 13, fontWeight: '600', color: '#666', marginBottom: 8 },
   input: {
@@ -373,7 +381,6 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 14,
     marginBottom: 20,
-    // ensure text and button height match
     minHeight: 50, 
     justifyContent: 'center',
   },
@@ -408,17 +415,16 @@ const styles = StyleSheet.create({
   },
   createButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
 
-  // CONTACT MODAL
+  // CONTACT MODAL STYLES
   modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    paddingTop: 24,
+    paddingBottom: 12,
     alignItems: 'center',
-    padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#EEE',
   },
-  doneModalText: { color: Colors.primary, fontWeight: '700', fontSize: 16 },
   modalTitle: { fontSize: 18, fontWeight: 'bold' },
+
   searchBarContainer: { padding: 16 },
   searchBar: {
     backgroundColor: '#F0F2F5',
@@ -426,45 +432,46 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     fontSize: 16,
   },
+
   contactItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
+    padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
+    borderBottomColor: '#F2F2F2',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   contactItemSelected: { backgroundColor: '#F9FAFF' },
-  contactLeft: { flexDirection: 'row', alignItems: 'center' },
-  contactAvatar: {
-    width: 45,
-    height: 45,
-    borderRadius: 22.5,
-    backgroundColor: '#E8F2FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 15,
-  },
-  avatarText: { color: Colors.primary, fontWeight: 'bold', fontSize: 18 },
-  contactName: { fontSize: 16, fontWeight: '600' },
-  contactPhone: { fontSize: 13, color: '#888' },
-  emptyListText: { textAlign: 'center', marginTop: 40, color: '#AAA' },
-  checkbox: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#CCC',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  checkboxSelected: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-  },
-  checkmark: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  contactName: { fontSize: 16, fontWeight: '500' },
+  contactPhone: { fontSize: 12, color: '#888', marginTop: 2 },
+  
+  checkmark: { color: Colors.primary, fontWeight: 'bold', fontSize: 18 },
+  emptyListText: { textAlign: 'center', marginTop: 40, color: '#AAA', paddingHorizontal: 20 },
 
-  // ✅ CURRENCY PICKER STYLES
+  // FLOATING DONE BUTTON
+  floatingDoneButton: {
+    position: 'absolute',
+    bottom: 30,
+    right: 30,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+  },
+  floatingDoneIcon: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: 'bold',
+  },
+
+  // CURRENCY PICKER STYLES
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',

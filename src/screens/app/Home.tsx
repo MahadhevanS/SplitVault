@@ -10,10 +10,14 @@ import {
   Alert,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { supabase } from '../../api/supabase';
 import { Trip } from '../../types/database';
 import { Colors } from '../../constants';
 import { showAlert } from '@/src/utils/showAlert';
+
+/* ---------------- EMPTY STATE ---------------- */
 
 const EmptyTrips = ({ onCreate }: { onCreate: () => void }) => (
   <View style={styles.emptyContainer}>
@@ -28,12 +32,17 @@ const EmptyTrips = ({ onCreate }: { onCreate: () => void }) => (
   </View>
 );
 
+/* ---------------- SCREEN ---------------- */
+
 export default function Home() {
   const navigation = useNavigation<any>();
+  const insets = useSafeAreaInsets();
+
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // ✅ FIX: useFocusEffect ensures this runs every time the screen becomes visible
+  /* ---------------- DATA ---------------- */
+
   useFocusEffect(
     useCallback(() => {
       fetchTrips();
@@ -41,16 +50,11 @@ export default function Home() {
   );
 
   const fetchTrips = async () => {
-    // Only show loading spinner on the initial load to prevent flicker on every focus
-    // You can adjust this preference if you want a spinner every time
-    // setLoading(true); 
-
     const {
       data: { session },
     } = await supabase.auth.getSession();
 
     const userId = session?.user?.id;
-
     if (!userId) {
       setLoading(false);
       return;
@@ -61,7 +65,6 @@ export default function Home() {
       .select('trip:trip_id(*)')
       .eq('user_id', userId)
       .eq('trip.status', 'Active')
-      // Optional: Sort by newest first
       .order('created_at', { foreignTable: 'trip', ascending: false });
 
     if (error) {
@@ -77,7 +80,7 @@ export default function Home() {
     setLoading(false);
   };
 
-  /* ---------------- DELETE LOGIC ---------------- */
+  /* ---------------- DELETE ---------------- */
 
   const confirmDelete = (trip: Trip) => {
     Alert.alert(
@@ -110,6 +113,8 @@ export default function Home() {
     }
   };
 
+  /* ---------------- RENDER ITEM ---------------- */
+
   const renderTripItem = ({ item }: { item: Trip }) => (
     <View style={styles.tripCard}>
       <TouchableOpacity
@@ -140,56 +145,92 @@ export default function Home() {
     </View>
   );
 
+  /* ---------------- LOADING ---------------- */
+
   if (loading) {
-    return <ActivityIndicator size="large" style={{ flex: 1, justifyContent: 'center' }} />;
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+      </View>
+    );
   }
 
+  /* ---------------- UI ---------------- */
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Your Active Trips</Text>
-
-      <TouchableOpacity
-        style={styles.createTripButton}
-        onPress={() =>
-          navigation.navigate('Trip', { screen: 'CreateTrip' })
-        }
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <View
+        style={[
+          styles.container,
+          {
+            paddingBottom: insets.bottom + 10,
+          },
+        ]}
       >
-        <Text style={styles.createTripText}>+ Create Trip</Text>
-      </TouchableOpacity>
+        <Text style={styles.header}>Your Active Trips</Text>
 
-      <FlatList
-        data={trips}
-        keyExtractor={item => item.trip_id}
-        renderItem={renderTripItem}
-        ListEmptyComponent={<EmptyTrips onCreate={() => navigation.navigate('Trip', { screen: 'CreateTrip' })} />}
-        contentContainerStyle={{ paddingBottom: 50 }}
-      />
+        <TouchableOpacity
+          style={styles.createTripButton}
+          onPress={() =>
+            navigation.navigate('Trip', { screen: 'CreateTrip' })
+          }
+        >
+          <Text style={styles.createTripText}>+ Create Trip</Text>
+        </TouchableOpacity>
 
-      <View style={{ marginTop: 10 }}>
-        <Button
-          title="Logout"
-          onPress={() => supabase.auth.signOut()}
-          color={Colors.danger}
+        <FlatList
+          data={trips}
+          keyExtractor={item => item.trip_id}
+          renderItem={renderTripItem}
+          ListEmptyComponent={
+            <EmptyTrips
+              onCreate={() =>
+                navigation.navigate('Trip', { screen: 'CreateTrip' })
+              }
+            />
+          }
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{
+            paddingBottom: 30,
+          }}
         />
+
+        <View style={{ marginTop: 12 }}>
+          <Button
+            title="Logout"
+            onPress={() => supabase.auth.signOut()}
+            color={Colors.danger}
+          />
+        </View>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
-
-/* -------------------- STYLES -------------------- */
+/* ---------------- STYLES ---------------- */
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+
   container: {
     flex: 1,
-    padding: 20,
-    backgroundColor: Colors.background,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+  },
+
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 
   header: {
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 20,
+    marginBottom: 16,
   },
 
   tripCard: {
@@ -218,7 +259,7 @@ const styles = StyleSheet.create({
   },
 
   importBtn: {
-    backgroundColor: '#E8F2FF', // Light blue background
+    backgroundColor: '#E8F2FF',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 6,
@@ -233,8 +274,7 @@ const styles = StyleSheet.create({
 
   emptyContainer: {
     alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 50,
+    marginTop: 60,
   },
 
   emptyText: {

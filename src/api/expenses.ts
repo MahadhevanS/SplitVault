@@ -121,7 +121,6 @@ export async function getPendingConsents(tripId: UUID, userId: UUID) {
     .select(`
       consent_id,
       status,
-      reason,
       expense:expense_id (
         expense_id,
         name,
@@ -145,13 +144,11 @@ export async function getPendingConsents(tripId: UUID, userId: UUID) {
 export async function updateConsentStatus(
   consentId: UUID,
   newStatus: 'Approved' | 'Disputed',
-  reason?: string
 ) {
   const { error } = await supabase
     .from('consents')
     .update({ 
         status: newStatus, 
-        reason: reason || null,
         timestamp: new Date().toISOString() 
     })
     .eq('consent_id', consentId);
@@ -311,27 +308,6 @@ export async function getPeerBalance(
   return netBalance;
 }
 
-export async function getDisputedExpenses(tripId: UUID, payerId: UUID) {
-  const { data, error } = await supabase
-    .from('consents')
-    .select(`
-      consent_id,
-      debtor_user_id,
-      expense:expense_id (
-        expense_id,
-        name,
-        amount,
-        payer_id
-      )
-    `)
-    .eq('status', CONSENT_STATUSES.DISPUTED)
-    .eq('expense.trip_id', tripId)
-    .eq('expense.payer_id', payerId);
-
-  if (error) throw error;
-  return data;
-}
-
 export async function raiseDispute(expenseId: string, userId: string) {
   const { error } = await supabase
     .from('consents')
@@ -343,4 +319,18 @@ export async function raiseDispute(expenseId: string, userId: string) {
     .eq('debtor_user_id', userId);
 
   if (error) throw error;
+}
+
+export async function acceptDispute(consentId: string) {
+  await supabase
+    .from('expense_consents')
+    .update({ status: 'Accepted' })
+    .eq('consent_id', consentId);
+}
+
+export async function requestReconsideration(consentId: string) {
+  await supabase
+    .from('expense_consents')
+    .update({ status: 'Reconsider' })
+    .eq('consent_id', consentId);
 }

@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Modal,
-  Platform,
 } from 'react-native';
 import { useNavigation, useRoute, CommonActions } from '@react-navigation/native';
 import * as Contacts from 'expo-contacts';
@@ -23,7 +22,7 @@ import { Colors, CURRENCY } from '@/src/constants';
 
 interface Member {
   user_id: string;
-  name: string; // This will now hold the Contact Name if available, else DB Name
+  name: string;
   phone?: string;
   is_involved: boolean;
 }
@@ -43,7 +42,7 @@ export default function ExpenseInputScreen() {
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  const [name, setName] = useState(importedPayee || '');
+  const [name, setName] = useState(importedPayee || 'unknown expense');
   const [amount, setAmount] = useState(importedAmount ? String(importedAmount) : '');
 
   const [members, setMembers] = useState<Member[]>([]);
@@ -61,10 +60,6 @@ export default function ExpenseInputScreen() {
       }
     });
   }, []);
-
-  useEffect(() => {
-    if (tripId) fetchMembersAndContacts();
-  }, [tripId]);
 
   useEffect(() => {
     // Default the payer to current user if they are in the list
@@ -112,12 +107,10 @@ export default function ExpenseInputScreen() {
       let phoneToContactName = new Map<string, string>();
 
       if (status === 'granted') {
-        // 3. Get Device Contacts if permission granted
         const { data: contactData } = await Contacts.getContactsAsync({
           fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
         });
 
-        // Create a Map: Normalized Phone -> Contact Name
         contactData.forEach(c => {
           c.phoneNumbers?.forEach(p => {
             const norm = normalizePhone(p.number!);
@@ -126,31 +119,37 @@ export default function ExpenseInputScreen() {
         });
       }
 
-      // 4. Merge Data
+      // 3. Merge Data Logic
       finalMembers = dbMembers.map((m: any) => {
+        // CASE 1: Current User -> Always "You"
         if (m.user_id === activeUid) {
           return {
             user_id: m.user_id,
-            name: 'You', // Force name to "You"
+            name: 'You',
             phone: m.users?.phone,
             is_involved: true,
           };
         }
         
+        // CASE 2: Other Users
         const dbPhone = m.users?.phone;
         const normDbPhone = normalizePhone(dbPhone);
         
-        // Priority: Nickname (Trip specific) > Device Contact Name > Global DB Name
-        let displayName = m.nickname; 
-        
-        if (!displayName) {
-           // If no nickname set in trip, check device contacts
-           if (normDbPhone && phoneToContactName.has(normDbPhone)) {
-             displayName = phoneToContactName.get(normDbPhone);
-           } else {
-             // Fallback to the name they registered with
-             displayName = m.users?.name || 'Unknown User';
-           }
+        let displayName = '';
+
+        // Priority 1: Device Contact Name
+        if (normDbPhone && phoneToContactName.has(normDbPhone)) {
+            displayName = phoneToContactName.get(normDbPhone)!;
+        } 
+        // Priority 2: DB Name (Handling "Creator" edge case)
+        else {
+            // Check if nickname exists and is NOT "Creator"
+            if (m.nickname && m.nickname !== 'Creator') {
+                displayName = m.nickname;
+            } else {
+                // Fallback to real registered name or "Unknown"
+                displayName = m.users?.name || 'Unknown User';
+            }
         }
 
         return {
