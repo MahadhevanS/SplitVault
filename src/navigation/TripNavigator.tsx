@@ -5,6 +5,7 @@ import ExpenseInput from '../screens/trip/ExpenseInput';
 import Consents from '../screens/trip/Consents';
 import CreateTrip from '../screens/trip/CreateTrip'; 
 import Disputes from '../screens/trip/Disputes';
+import ExpenseDetails from '../screens/trip/expense/ExpenseDetails';
 
 const Stack = createNativeStackNavigator();
 
@@ -29,6 +30,13 @@ export default function TripNavigator() {
         component={ExpenseInput}
         options={{ title: 'Add New Expense' }}
       />
+
+      <Stack.Screen
+        name="ExpenseDetails"
+        component={ExpenseDetails}
+        options={{ title: 'Expense Details' }}
+      />
+
       <Stack.Screen
         name="Consents"
         component={Consents}

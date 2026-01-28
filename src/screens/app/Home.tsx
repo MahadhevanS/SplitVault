@@ -12,6 +12,7 @@ import {
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { getTripBalances } from '../../api/expenses';
 import { supabase } from '../../api/supabase';
 import { Trip } from '../../types/database';
 import { Colors } from '../../constants';
@@ -40,6 +41,7 @@ export default function Home() {
 
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   /* ---------------- DATA ---------------- */
 
@@ -59,12 +61,15 @@ export default function Home() {
       setLoading(false);
       return;
     }
+    setCurrentUserId(userId);
 
     const { data, error } = await supabase
       .from('trip_members')
       .select('trip:trip_id(*)')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .eq('trip.status', 'Active')
+      .not('trip', 'is', null)
       .order('created_at', { foreignTable: 'trip', ascending: false });
 
     if (error) {
@@ -80,25 +85,98 @@ export default function Home() {
     setLoading(false);
   };
 
-  /* ---------------- DELETE ---------------- */
+  /* ---------------- ACTIONS ---------------- */
+  const handleLeaveRequest = async (trip: Trip) => {
+    if (!currentUserId) return;
+    setLoading(true);
 
-  const confirmDelete = (trip: Trip) => {
-    Alert.alert(
-      'Delete Trip',
-      `Are you sure you want to delete "${trip.name}"?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => deleteTrip(trip.trip_id),
-        },
-      ]
-    );
+    try {
+      // 1. Calculate Balance before allowing leave
+      const balances = await getTripBalances(trip.trip_id);
+      
+      // Find current user's balance
+      const myBalanceData = balances.find(b => b.user_id === currentUserId);
+      const myBalance = myBalanceData ? myBalanceData.net_balance : 0;
+
+      setLoading(false);
+
+      // 2. If balance is not ZERO (with small margin for float errors), Block them
+      if (Math.abs(myBalance) > 0.01) {
+        Alert.alert(
+          "Cannot Leave Trip",
+          `You have an outstanding balance of ${trip.currency}${myBalance.toFixed(2)}. \n\nPlease settle your debts (or get paid back) before leaving.`
+        );
+        return;
+      }
+
+      // 3. If Balance is Clear, Ask for Confirmation
+      Alert.alert(
+        'Leave Trip',
+        `Are you sure you want to leave "${trip.name}"?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Leave',
+            style: 'destructive',
+            onPress: () => processLeaveTrip(trip.trip_id),
+          },
+        ]
+      );
+
+    } catch (error) {
+      setLoading(false);
+      showAlert("Error", "Could not verify balance.");
+    }
+  };
+
+  const processLeaveTrip = async (tripId: string) => {
+    if (!currentUserId) return;
+    
+    try {
+      const { error } = await supabase
+        .from('trip_members')
+        .update({ is_active: false }) 
+        .eq('trip_id', tripId)
+        .eq('user_id', currentUserId);
+
+      if (error) throw error;
+
+      // Remove from local list
+      setTrips((prev) => prev.filter((t) => t.trip_id !== tripId));
+      showAlert('Success', 'You have left the trip');
+    } catch (error: any) {
+      console.error(error);
+      showAlert('Error', 'Failed to leave trip. Please try again.');
+    }
+  };
+
+  const handleLongPress = (trip: Trip) => {
+    if (!currentUserId) return;
+
+    const isCreator = trip.creator_id === currentUserId;
+
+    if (isCreator) {
+      // Creator: Can Delete
+      Alert.alert(
+        'Delete Trip',
+        `Are you sure you want to delete "${trip.name}"? This cannot be undone.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => deleteTrip(trip.trip_id),
+          },
+        ]
+      );
+    } else {
+      handleLeaveRequest(trip);
+    }
   };
 
   const deleteTrip = async (tripId: string) => {
     try {
+      // Soft delete the trip
       const { error } = await supabase
         .from('trips')
         .update({ status: 'Deleted' })
@@ -106,10 +184,30 @@ export default function Home() {
 
       if (error) throw error;
 
-      setTrips(prev => prev.filter(t => t.trip_id !== tripId));
+      setTrips((prev) => prev.filter((t) => t.trip_id !== tripId));
       showAlert('Success', 'Trip deleted successfully');
     } catch (error: any) {
       showAlert('Error', error.message || 'Failed to delete trip');
+    }
+  };
+
+  const leaveTrip = async (tripId: string) => {
+    if (!currentUserId) return;
+    
+    try {
+      // Remove user from trip_members
+      const { error } = await supabase
+        .from('trip_members')
+        .delete()
+        .eq('trip_id', tripId)
+        .eq('user_id', currentUserId);
+
+      if (error) throw error;
+
+      setTrips((prev) => prev.filter((t) => t.trip_id !== tripId));
+      showAlert('Success', 'You have left the trip');
+    } catch (error: any) {
+      showAlert('Error', error.message || 'Failed to leave trip');
     }
   };
 
@@ -125,7 +223,7 @@ export default function Home() {
             params: { id: item.trip_id },
           })
         }
-        onLongPress={() => confirmDelete(item)}
+        onLongPress={() => handleLongPress(item)}
         delayLongPress={500}
       >
         <Text style={styles.tripName}>{item.name}</Text>

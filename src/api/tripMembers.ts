@@ -3,11 +3,9 @@ import { supabase } from '@/src/api/supabase';
 export async function addMemberToTrip({
   tripId,
   email,
-  nickname,
 }: {
   tripId: string;
   email: string;
-  nickname?: string;
 }) {
   // 1️⃣ Find user by email
   const { data: user, error: userError } = await supabase
@@ -26,7 +24,6 @@ export async function addMemberToTrip({
     .insert({
       trip_id: tripId,
       user_id: user.id,
-      nickname,
     });
 
   if (insertError) {

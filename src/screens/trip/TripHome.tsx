@@ -11,7 +11,7 @@ import {
   Modal,
   Alert,
   Linking,
-  SafeAreaView, // ✅ Using this for the main screen now
+  SafeAreaView,
   Pressable,
 } from 'react-native';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
@@ -28,6 +28,7 @@ import { showAlert } from '@/src/utils/showAlert';
 /* ---------------- TYPES ---------------- */
 
 interface RegisteredContact {
+  id?: string; // ✅ Added ID to help identify existing inactive members
   contact: Contacts.Contact;
   email: string;
   name: string;
@@ -42,8 +43,9 @@ export default function TripDetailScreen() {
 
   const [balances, setBalances] = useState<TripBalance[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
-  const [members, setMembers] = useState<any[]>([]);
+  const [members, setMembers] = useState<any[]>([]); // Contains Active AND Inactive
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [tripCreatorId, setTripCreatorId] = useState<string | null>(null); // ✅ Store Creator ID
   const [loading, setLoading] = useState(true);
   
   const [allTripExpenses, setAllTripExpenses] = useState<any[]>([]);
@@ -55,17 +57,19 @@ export default function TripDetailScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [contactLoading, setContactLoading] = useState(false);
   const [addingMember, setAddingMember] = useState(false);
+  const [contactNameMap, setContactNameMap] = useState<Map<string, string>>(new Map());
 
   /* -------------------- DATA LOADING -------------------- */
 
   const refreshTripData = async (uid: string) => {
     try {
-      const [balancesData, expensesData, membersResult, allExpensesResult] = await Promise.all([
+      const [balancesData, expensesData, membersResult, allExpensesResult, tripResult] = await Promise.all([
         getTripBalances(tripId),
         getTripExpensesForUser(tripId, uid),
         supabase
           .from('trip_members')
-          .select('user_id, nickname, users!trip_members_user_id_fkey(name)')
+          // ✅ Select is_active to filter list and handle re-adds
+          .select('user_id, is_active, users!trip_members_user_id_fkey(name,phone)')
           .eq('trip_id', tripId),
         supabase
           .from('expenses')
@@ -74,12 +78,15 @@ export default function TripDetailScreen() {
             payer_id,
             consents (debtor_user_id)
           `)
-          .eq('trip_id', tripId)
+          .eq('trip_id', tripId),
+        // ✅ Fetch Trip Info to get Created By
+        supabase.from('trips').select('creator_id').eq('trip_id', tripId).single()
       ]);
 
       setBalances(balancesData);
       setExpenses(expensesData || []);
       
+      if (tripResult.data) setTripCreatorId(tripResult.data.creator_id);
       if (!membersResult.error) setMembers(membersResult.data ?? []);
       if (!allExpensesResult.error) setAllTripExpenses(allExpensesResult.data ?? []);
 
@@ -106,7 +113,29 @@ export default function TripDetailScreen() {
     load();
   }, [tripId]);
 
-  // Refresh when coming back to screen (e.g. after adding expense)
+  useEffect(() => {
+    (async () => {
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') return;
+
+      const { data } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+      });
+
+      const map = new Map<string, string>();
+
+      data.forEach(contact => {
+        contact.phoneNumbers?.forEach(p => {
+          const phone = normalizePhone(p.number!);
+          map.set(phone, contact.name);
+        });
+      });
+
+      setContactNameMap(map);
+    })();
+  }, []);
+
+  // Refresh when coming back to screen
   useFocusEffect(
     useCallback(() => {
       if (currentUserId && tripId) {
@@ -122,19 +151,17 @@ export default function TripDetailScreen() {
 
     return expensesArr.reduce((acc, exp) => {
       const involved = exp.consents || [];
-      const shareCount = involved.length + 1; // +1 for Payer
+      const shareCount = involved.length + 1; 
       if (shareCount === 1) return acc;
 
       const shareAmount = exp.amount / shareCount;
 
       if (exp.payer_id === currentId) {
-        // You paid, check if target owes you
         const isTargetDebtor = involved.some((c: any) => c.debtor_user_id === targetId);
         if (isTargetDebtor) return acc + shareAmount;
       }
 
       if (exp.payer_id === targetId) {
-        // Target paid, check if you owe them
         const amIDebtor = involved.some((c: any) => c.debtor_user_id === currentId);
         if (amIDebtor) return acc - shareAmount;
       }
@@ -143,6 +170,71 @@ export default function TripDetailScreen() {
     }, 0);
   };
 
+  /* -------------------- REMOVE MEMBER LOGIC -------------------- */
+
+  const handleRemoveMember = async (member: any) => {
+    // 1. Check if Creator ID is loaded
+    if (!tripCreatorId || !currentUserId) {
+        // Data hasn't loaded yet
+        return; 
+    }
+
+    // 2. Permission Check with Feedback
+    if (currentUserId !== tripCreatorId) {
+      Alert.alert("Permission Denied", "Only the trip creator can remove members.");
+      return;
+    }
+
+    // 3. Cannot remove self
+    if (member.user_id === currentUserId) {
+        Alert.alert("Action Not Allowed", "You cannot remove yourself. Please 'Leave Trip' from the home screen instead.");
+        return;
+    }
+
+    // 4. Check Balance
+    const memberBalanceData = balances.find(b => b.user_id === member.user_id);
+    const balanceAmount = memberBalanceData ? memberBalanceData.net_balance : 0;
+
+    // Use a small epsilon for float comparison
+    if (Math.abs(balanceAmount) > 0.02) {
+      Alert.alert(
+        "Cannot Remove Member",
+        `This member has an outstanding balance of ${CURRENCY}${balanceAmount.toFixed(2)}. All debts must be settled before they can be removed.`
+      );
+      return;
+    }
+
+    const memberName = member.users?.name || 'this member';
+
+    Alert.alert(
+      "Remove Member",
+      `Are you sure you want to remove ${memberName}? They can be added back later.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Remove", 
+          style: "destructive", 
+          onPress: async () => {
+            try {
+              // 5. Soft Delete
+              const { error } = await supabase
+                .from('trip_members')
+                .update({ is_active: false })
+                .eq('trip_id', tripId)
+                .eq('user_id', member.user_id);
+
+              if (error) throw error;
+              
+              showAlert("Success", "Member removed");
+              refreshTripData(currentUserId!);
+            } catch (e) {
+              showAlert("Error", "Failed to remove member");
+            }
+          }
+        }
+      ]
+    );
+  };
   /* -------------------- CONTACT LOGIC -------------------- */
 
   const normalizePhone = (phone: string) => {
@@ -210,11 +302,16 @@ export default function TripDetailScreen() {
 
       if (error) throw error;
 
-      const existingUserIds = members.map((m) => m.user_id);
+      // Filter out ONLY ACTIVE members from the contact list
+      // We want to allow selecting INACTIVE members so we can add them back
+      const activeMemberIds = members
+        .filter(m => m.is_active !== false)
+        .map(m => m.user_id);
 
       const matched: RegisteredContact[] = users
-        .filter((u) => !existingUserIds.includes(u.id)) 
+        .filter((u) => !activeMemberIds.includes(u.id)) 
         .map((u) => ({
+          id: u.id, // ✅ Store ID for re-activation check
           contact: phoneToContact.get(u.phone)!,
           email: u.email,
           name: phoneToContact.get(u.phone)?.name || u.name || 'Unknown',
@@ -236,13 +333,26 @@ export default function TripDetailScreen() {
 
     setAddingMember(true);
     try {
-      const promises = selectedContacts.map(member => 
-        addMemberToTrip({
-          tripId,
-          email: member.email,
-          nickname: member.name,
-        })
-      );
+      const promises = selectedContacts.map(async (contact) => {
+        // ✅ RE-ADD LOGIC:
+        // Check if this contact corresponds to an existing (inactive) member
+        const existingMember = members.find(m => m.user_id === contact.id);
+
+        if (existingMember) {
+          // If exists (inactive), update to active
+          return supabase
+            .from('trip_members')
+            .update({ is_active: true })
+            .eq('trip_id', tripId)
+            .eq('user_id', contact.id);
+        } else {
+          // If new, insert row
+          return addMemberToTrip({
+            tripId,
+            email: contact.email,
+          });
+        }
+      });
 
       await Promise.all(promises);
 
@@ -272,8 +382,10 @@ export default function TripDetailScreen() {
     );
   }
 
+  // Filter for rendering: only show ACTIVE members
+  const activeMembers = members.filter(m => m.is_active !== false);
+
   return (
-    // ✅ ADDED: Global SafeAreaView wrapper for this screen
     <SafeAreaView style={styles.safeAreaContainer}>
       <ScrollView style={styles.scrollView} contentContainerStyle={{ paddingBottom: 40 }}>
         
@@ -299,7 +411,6 @@ export default function TripDetailScreen() {
 
         {/* 2. ACTION GRID */}
         <View style={styles.actionGrid}>
-          
           <TouchableOpacity 
               style={[styles.gridButton, { backgroundColor: Colors.primary }]} 
               onPress={() => navigation.navigate('ExpenseInput', { id: tripId })}
@@ -331,14 +442,24 @@ export default function TripDetailScreen() {
         </View>
 
         <View style={styles.memberListCard}>
-          {members.filter(m => m.user_id !== currentUserId).map((m, i, arr) => {
+          {activeMembers.filter(m => m.user_id !== currentUserId).map((m, i, arr) => {
             const net = calculatePeerNet(m.user_id, currentUserId, allTripExpenses);
-            const displayName = (m.nickname && m.nickname !== 'Creator') 
-              ? m.nickname 
-              : (m.users?.name || 'Unknown User');
+            const userPhone = m.users?.phone || '';
+            const normalizedDbPhone = normalizePhone(userPhone);
+            
+            const contactName = contactNameMap.get(normalizedDbPhone);
+            const displayName = contactName || m.users?.name || 'Unknown User';
 
             return (
-              <View key={m.user_id || i} style={[styles.memberItemContainer, i === arr.length - 1 && { borderBottomWidth: 0 }]}>
+              // ✅ CHANGED: TouchableOpacity with onLongPress for removal
+              <TouchableOpacity 
+                key={m.user_id || i} 
+                style={[styles.memberItemContainer, i === arr.length - 1 && { borderBottomWidth: 0 }]}
+                onPress={() => {}}
+                onLongPress={() => handleRemoveMember(m)}
+                delayLongPress={200}
+                activeOpacity={0.6}
+              >
                 <View>
                   <Text style={styles.memberName}>{displayName}</Text>
                   <Text style={styles.memberSubtext}>
@@ -348,10 +469,10 @@ export default function TripDetailScreen() {
                 <Text style={[styles.memberBalance, { color: net >= 0 ? Colors.success : Colors.danger }]}>
                   {net > 0 ? '+' : ''}{CURRENCY}{Math.abs(net).toFixed(2)}
                 </Text>
-              </View>
+              </TouchableOpacity>
             );
           })}
-          {members.length <= 1 && (
+          {activeMembers.length <= 1 && (
               <Text style={{ padding: 16, color: '#999', fontStyle: 'italic' }}>No other members yet.</Text>
           )}
         </View>

@@ -37,7 +37,6 @@ export async function createTrip({
     .insert({
       trip_id: trip.trip_id,
       user_id: userId,
-      nickname: 'Creator',
     });
 
   if (memberError) {

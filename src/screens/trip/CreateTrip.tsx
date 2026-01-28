@@ -179,7 +179,6 @@ export default function CreateTripScreen() {
         await addMemberToTrip({
           tripId: trip.trip_id,
           email: member.email,
-          nickname: member.name,
         });
       }
 

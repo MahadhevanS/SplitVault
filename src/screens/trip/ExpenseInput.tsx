@@ -21,7 +21,7 @@ import { Colors, CURRENCY } from '@/src/constants';
 /* ---------- TYPES ---------- */
 
 interface Member {
-  user_id: string;
+  user_id: string;      // UUID as string (correct)
   name: string;
   phone?: string;
   is_involved: boolean;
@@ -32,12 +32,12 @@ interface Member {
 export default function ExpenseInputScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const { 
-    id: tripId, 
-    amount: importedAmount, 
-    payee: importedPayee 
+  const {
+    id: tripId,
+    amount: importedAmount,
+    payee: importedPayee,
   } = route.params || {};
-  
+
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -55,73 +55,65 @@ export default function ExpenseInputScreen() {
     supabase.auth.getSession().then(({ data }) => {
       const uid = data.session?.user.id ?? null;
       setCurrentUserId(uid);
-      if(uid && tripId){
+      if (uid && tripId) {
         fetchMembersAndContacts(uid);
       }
     });
   }, []);
 
   useEffect(() => {
-    // Default the payer to current user if they are in the list
     if (members.length && currentUserId && !payerId) {
-      const isCurrentUserInList = members.some(m => m.user_id === currentUserId);
-      if (isCurrentUserInList) {
-        setPayerId(currentUserId);
-      }
+      const exists = members.some(m => m.user_id === currentUserId);
+      if (exists) setPayerId(currentUserId);
     }
   }, [members, currentUserId]);
 
-  /* ---------- DATA FETCHING & MATCHING ---------- */
+  /* ---------- HELPERS ---------- */
 
   const normalizePhone = (phone: string | null) => {
     if (!phone) return '';
     let cleaned = phone.replace(/[^0-9+]/g, '');
-    // Standardize India code for matching
     if (cleaned.startsWith('+91')) cleaned = cleaned.slice(3);
     else if (cleaned.startsWith('91') && cleaned.length === 12) cleaned = cleaned.slice(2);
     return cleaned;
   };
 
-  async function fetchMembersAndContacts(activeUid : string) {
+  /* ---------- DATA FETCH ---------- */
+
+  async function fetchMembersAndContacts(activeUid: string) {
     try {
-      // 1. Fetch Trip Members + Phone Numbers from DB
       const { data: dbMembers, error } = await supabase
         .from('trip_members')
         .select(`
           user_id,
-          nickname,
+          is_active,
           users:users!trip_members_user_id_fkey (
             name,
             phone
           )
         `)
-        .eq('trip_id', tripId);
+        .eq('trip_id', tripId)
+        .eq('is_active', true);
 
       if (error) throw error;
 
-      let finalMembers: Member[] = [];
-
-      // 2. Request Contact Permissions
       const { status } = await Contacts.requestPermissionsAsync();
-      
-      let phoneToContactName = new Map<string, string>();
+      const phoneMap = new Map<string, string>();
 
       if (status === 'granted') {
-        const { data: contactData } = await Contacts.getContactsAsync({
+        const { data } = await Contacts.getContactsAsync({
           fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
         });
 
-        contactData.forEach(c => {
+        data.forEach(c => {
           c.phoneNumbers?.forEach(p => {
             const norm = normalizePhone(p.number!);
-            if (norm) phoneToContactName.set(norm, c.name);
+            if (norm) phoneMap.set(norm, c.name);
           });
         });
       }
 
-      // 3. Merge Data Logic
-      finalMembers = dbMembers.map((m: any) => {
-        // CASE 1: Current User -> Always "You"
+      const finalMembers: Member[] = dbMembers.map((m: any) => {
         if (m.user_id === activeUid) {
           return {
             user_id: m.user_id,
@@ -130,38 +122,24 @@ export default function ExpenseInputScreen() {
             is_involved: true,
           };
         }
-        
-        // CASE 2: Other Users
+
         const dbPhone = m.users?.phone;
         const normDbPhone = normalizePhone(dbPhone);
-        
-        let displayName = '';
 
-        // Priority 1: Device Contact Name
-        if (normDbPhone && phoneToContactName.has(normDbPhone)) {
-            displayName = phoneToContactName.get(normDbPhone)!;
-        } 
-        // Priority 2: DB Name (Handling "Creator" edge case)
-        else {
-            // Check if nickname exists and is NOT "Creator"
-            if (m.nickname && m.nickname !== 'Creator') {
-                displayName = m.nickname;
-            } else {
-                // Fallback to real registered name or "Unknown"
-                displayName = m.users?.name || 'Unknown User';
-            }
-        }
+        const displayName =
+          (normDbPhone && phoneMap.get(normDbPhone)) ||
+          m.users?.name ||
+          'Unknown User';
 
         return {
           user_id: m.user_id,
           name: displayName,
           phone: dbPhone,
-          is_involved: true, // Default to all selected
+          is_involved: true,
         };
       });
 
       setMembers(finalMembers);
-
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'Failed to load trip members.');
@@ -175,9 +153,7 @@ export default function ExpenseInputScreen() {
   function toggleInvolved(userId: string) {
     setMembers(prev =>
       prev.map(m =>
-        m.user_id === userId
-          ? { ...m, is_involved: !m.is_involved }
-          : m
+        m.user_id === userId ? { ...m, is_involved: !m.is_involved } : m
       )
     );
   }
@@ -188,7 +164,6 @@ export default function ExpenseInputScreen() {
 
   async function handleSaveExpense() {
     const parsedAmount = parseFloat(amount);
-    const involved = members.filter(m => m.is_involved);
 
     if (!name.trim() || isNaN(parsedAmount) || parsedAmount <= 0) {
       Alert.alert('Invalid Input', 'Enter valid name and amount.');
@@ -200,47 +175,47 @@ export default function ExpenseInputScreen() {
       return;
     }
 
-    if (involved.length === 0) {
-      Alert.alert('Invalid Split', 'Select at least one member.');
-      return;
-    }
+    // ✅ IMPORTANT FIX: payer is NOT a debtor
+    const debtors = members.filter(
+      m => m.is_involved && m.user_id !== payerId
+    );
 
     setIsSaving(true);
 
     try {
-      const shareAmount = parsedAmount / involved.length;
+      const shareAmount = parsedAmount / (debtors.length + 1);
 
       await createNewExpense({
         trip_id: tripId,
         name,
         amount: parsedAmount,
         payer_id: payerId,
-        involvedMembers: involved.map(m => ({
+        involvedMembers: debtors.map(m => ({
           user_id: m.user_id,
           share_amount: shareAmount,
         })),
       });
 
-      // Reset stack to go back to Home -> TripHome
       navigation.dispatch(
         CommonActions.reset({
-          index: 1, 
+          index: 1,
           routes: [
-            { name: 'App', params: { screen: 'Home' } }, 
-            { 
-              name: 'App', 
-              params: { 
-                screen: 'Trip', 
-                params: { 
-                  screen: 'TripHome', 
-                  params: { id: tripId } 
-                } 
-              } 
-            }, 
+            { name: 'App', params: { screen: 'Home' } },
+            {
+              name: 'App',
+              params: {
+                screen: 'Trip',
+                params: {
+                  screen: 'TripHome',
+                  params: { id: tripId },
+                },
+              },
+            },
           ],
         })
       );
-    } catch {
+    } catch (e) {
+      console.error(e);
       Alert.alert('Error', 'Failed to save expense.');
     } finally {
       setIsSaving(false);
@@ -287,17 +262,19 @@ export default function ExpenseInputScreen() {
 
       <View style={styles.section}>
         <View style={styles.splitHeaderRow}>
-            <Text style={styles.sectionHeader}>Split Between</Text>
-            <TouchableOpacity onPress={() => {
-                const allSelected = members.every(m => m.is_involved);
-                setMembers(prev => prev.map(m => ({ ...m, is_involved: !allSelected })));
-            }}>
-                <Text style={styles.selectAllText}>
-                    {members.every(m => m.is_involved) ? 'Deselect All' : 'Select All'}
-                </Text>
-            </TouchableOpacity>
+          <Text style={styles.sectionHeader}>Split Between</Text>
+          <TouchableOpacity
+            onPress={() => {
+              const all = members.every(m => m.is_involved);
+              setMembers(prev => prev.map(m => ({ ...m, is_involved: !all })));
+            }}
+          >
+            <Text style={styles.selectAllText}>
+              {members.every(m => m.is_involved) ? 'Deselect All' : 'Select All'}
+            </Text>
+          </TouchableOpacity>
         </View>
-        
+
         {members.map(m => (
           <TouchableOpacity
             key={m.user_id}
@@ -307,11 +284,12 @@ export default function ExpenseInputScreen() {
             ]}
             onPress={() => toggleInvolved(m.user_id)}
           >
-            <Text style={[styles.memberName, !m.is_involved && {color: '#888'}]}>{m.name}</Text>
-            
-            {/* Checkbox Visual */}
+            <Text style={[styles.memberName, !m.is_involved && { color: '#888' }]}>
+              {m.name}
+            </Text>
+
             <View style={[styles.checkbox, m.is_involved && styles.checkboxSelected]}>
-                {m.is_involved && <Text style={styles.checkmark}>✓</Text>}
+              {m.is_involved && <Text style={styles.checkmark}>✓</Text>}
             </View>
           </TouchableOpacity>
         ))}
@@ -323,37 +301,38 @@ export default function ExpenseInputScreen() {
         disabled={isSaving}
         color={Colors.primary}
       />
-      <View style={{height: 40}} /> 
 
-      {/* Payer Selection Modal */}
+      <View style={{ height: 40 }} />
+
+      {/* ---------- PAYER MODAL ---------- */}
       <Modal visible={showPayerPicker} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Select Payer</Text>
 
-            <ScrollView style={{maxHeight: 300}}>
-                {members.map(m => (
+            <ScrollView style={{ maxHeight: 300 }}>
+              {members.map(m => (
                 <TouchableOpacity
-                    key={m.user_id}
-                    style={[
+                  key={m.user_id}
+                  style={[
                     styles.modalOption,
                     payerId === m.user_id && styles.selectedOption,
-                    ]}
-                    onPress={() => {
+                  ]}
+                  onPress={() => {
                     setPayerId(m.user_id);
                     setShowPayerPicker(false);
-                    }}
+                  }}
                 >
-                    <Text
+                  <Text
                     style={[
-                        styles.modalOptionText,
-                        payerId === m.user_id && { color: '#fff' },
+                      styles.modalOptionText,
+                      payerId === m.user_id && { color: '#fff' },
                     ]}
-                    >
+                  >
                     {m.name}
-                    </Text>
+                  </Text>
                 </TouchableOpacity>
-                ))}
+              ))}
             </ScrollView>
 
             <TouchableOpacity
@@ -376,30 +355,81 @@ const styles = StyleSheet.create({
   section: { backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 20 },
   sectionHeader: { fontSize: 16, fontWeight: 'bold', marginBottom: 10, color: '#333' },
   label: { marginBottom: 5, color: '#666', fontWeight: '500' },
-  input: { height: 48, backgroundColor: '#f9f9f9', borderWidth: 1, borderColor: '#eee', borderRadius: 8, paddingHorizontal: 12, marginBottom: 15, fontSize: 16 },
-  
-  dropdown: { backgroundColor: '#fff', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#ddd', marginBottom: 20 },
+  input: {
+    height: 48,
+    backgroundColor: '#f9f9f9',
+    borderWidth: 1,
+    borderColor: '#eee',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    marginBottom: 15,
+    fontSize: 16,
+  },
+
+  dropdown: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    marginBottom: 20,
+  },
   dropdownText: { fontSize: 16, fontWeight: '600', color: '#333' },
-  
-  splitHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+
+  splitHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
   selectAllText: { color: Colors.primary, fontWeight: '600' },
 
-  memberRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 10, borderRadius: 8, marginBottom: 6 },
+  memberRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    marginBottom: 6,
+  },
   involved: { backgroundColor: '#F0F9FF', borderWidth: 1, borderColor: '#BAE6FD' },
   notInvolved: { backgroundColor: '#f9f9f9', borderWidth: 1, borderColor: 'transparent' },
-  
+
   memberName: { fontSize: 16, fontWeight: '500' },
-  
-  // Custom Checkbox
-  checkbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#ccc', justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' },
+
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#ccc',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
   checkboxSelected: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   checkmark: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
-  modalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 20, elevation: 5 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalBox: { backgroundColor: '#fff', borderRadius: 16, padding: 20 },
   modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
-  modalOption: { padding: 16, borderRadius: 10, borderWidth: 1, borderColor: '#eee', marginBottom: 8, backgroundColor: '#f9f9f9' },
+
+  modalOption: {
+    padding: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#eee',
+    marginBottom: 8,
+    backgroundColor: '#f9f9f9',
+  },
   selectedOption: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   modalOptionText: { fontSize: 16, fontWeight: '600', textAlign: 'center', color: '#333' },
+
   cancelButton: { marginTop: 15, alignItems: 'center', padding: 10 },
 });

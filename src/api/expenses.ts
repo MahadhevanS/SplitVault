@@ -8,15 +8,15 @@ import { UUID } from 'crypto';
 // --- TYPE UTILITIES ---
 
 interface MemberShare {
-  user_id: UUID;
+  user_id: string;
   share_amount: number;
 }
 
 interface NewExpenseData {
-  trip_id: UUID;
+  trip_id: string;
   name: string;
   amount: number;
-  payer_id: UUID;
+  payer_id: string;
   involvedMembers: MemberShare[]; // Array of members and their calculated shares
 }
 
@@ -48,57 +48,91 @@ export async function createNewExpense({
   payer_id,
   involvedMembers,
 }: NewExpenseData) {
-  
-  // 1. Insert the main expense record
+
+  /* ---------- VALIDATIONS ---------- */
+
+  if (!trip_id || !payer_id) {
+    throw new Error('Trip ID and Payer ID are required');
+  }
+
+  if (!Array.isArray(involvedMembers)) {
+    throw new Error('Involved members must be an array');
+  }
+
+  if (involvedMembers.length === 0) {
+    throw new Error('At least one debtor is required');
+  }
+
+  // Ensure payer is NOT part of debtors
+  if (involvedMembers.some(m => m.user_id === payer_id)) {
+    throw new Error('Payer cannot be a debtor');
+  }
+
+  /* ---------- STEP 1: INSERT EXPENSE ---------- */
+
   const { data: expenseData, error: expenseError } = await supabase
     .from('expenses')
     .insert({
-      trip_id,
+      trip_id,          // UUID as string ✅
       name,
       amount,
-      payer_id,
+      payer_id,         // UUID as string ✅
       status: EXPENSE_STATUSES.APPROVED,
     })
     .select('expense_id')
     .single();
 
   if (expenseError) throw expenseError;
+
   const newExpenseId = expenseData.expense_id;
 
-  // 2. Prepare involvements and consents
+  /* ---------- STEP 2: PREPARE INVOLVEMENTS ---------- */
+
   const involvements = involvedMembers.map(m => ({
     expense_id: newExpenseId,
-    debtor_user_id: m.user_id,
+    debtor_user_id: m.user_id,       // UUID as string ✅
     share_amount: m.share_amount,
-    split_type: SPLIT_TYPES.EQUAL, // Simplified for now
+    split_type: SPLIT_TYPES.EQUAL,
   }));
 
-  const consents = involvedMembers
-    .filter(m => m.user_id !== payer_id) // Payer does not need to consent
-    .map(m => ({
-      expense_id: newExpenseId,
-      debtor_user_id: m.user_id,
-      status: CONSENT_STATUSES.REQUIRED,
-    }));
+  /* ---------- STEP 3: PREPARE CONSENTS ---------- */
+  // Payer already excluded — no filter needed
 
-  // 3. Insert Involvements (Debts)
+  const consents = involvedMembers.map(m => ({
+    expense_id: newExpenseId,
+    debtor_user_id: m.user_id,
+    status: CONSENT_STATUSES.REQUIRED,
+  }));
+
+  /* ---------- STEP 4: INSERT INVOLVEMENTS ---------- */
+
   const { error: involveError } = await supabase
     .from('involvements')
     .insert(involvements);
 
-  if (involveError) throw involveError;
+  if (involveError) {
+    // Cleanup orphan expense
+    await supabase.from('expenses').delete().eq('expense_id', newExpenseId);
+    throw involveError;
+  }
 
-  // 4. Insert Consents (Approvals)
+  /* ---------- STEP 5: INSERT CONSENTS ---------- */
+
   const { error: consentError } = await supabase
     .from('consents')
     .insert(consents);
 
-  if (consentError) throw consentError;
+  if (consentError) {
+    // Cleanup orphan records
+    await supabase.from('involvements').delete().eq('expense_id', newExpenseId);
+    await supabase.from('expenses').delete().eq('expense_id', newExpenseId);
+    throw consentError;
+  }
 
-  // NOTE: A Supabase database trigger/function should run after inserting consents
-  // to check for 'Pre_Approved' delegates and update the status automatically.
-
-  return { expenseId: newExpenseId, success: true };
+  return {
+    expenseId: newExpenseId,
+    success: true,
+  };
 }
 
 
